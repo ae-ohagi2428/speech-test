@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web Speech API 検証</title>
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --ink: #2b2a28;
+    --line: #d8d4cb;
+    --ok: #2f6f4e;
+    --ng: #a33b32;
+    --accent: #4a5d8a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .sub { font-size: 13px; color: #6b675f; margin: 0 0 20px; }
+
+  section {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  button {
+    font: inherit;
+    padding: 10px 16px;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    margin: 0 6px 6px 0;
+  }
+  button.sub-btn { background: #fff; color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+
+  #support div { padding: 2px 0; font-size: 14px; }
+  .ok { color: var(--ok); }
+  .ng { color: var(--ng); font-weight: bold; }
+
+  #transcript {
+    min-height: 80px;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 10px;
+    margin-top: 10px;
+    font-size: 15px;
+  }
+  .interim { color: #9a958c; }
+
+  #log {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    background: #f2f0ea;
+    border-radius: 5px;
+    padding: 10px;
+    height: 240px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  label { font-size: 14px; margin-right: 12px; }
+  .note { font-size: 13px; color: #6b675f; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>Web Speech API 検証</h1>
+<p class="sub">音声入力スケジュール管理アプリ用。スマホの実機で開いて確認する。</p>
+
+<section>
+  <h2>0. 対応状況</h2>
+  <div id="support"></div>
+</section>
+
+<section>
+  <h2>1〜2. 音声認識（話しながら文字が出るか）</h2>
+  <button id="recStart">認識スタート</button>
+  <button id="recStop" class="sub-btn" disabled>ストップ</button>
+  <div id="transcript"></div>
+  <p class="note">グレーの文字が「確定前」、黒が「確定後」。グレーが出れば逐次表示が動いている。</p>
+</section>
+
+<section>
+  <h2>3. 読み上げ（即時）</h2>
+  <button id="speakNow">今すぐ読み上げ</button>
+  <button id="listVoices" class="sub-btn">利用できる音声を一覧</button>
+</section>
+
+<section>
+  <h2>4〜7. 時間が来たら自動で読み上げる</h2>
+  <p class="note" style="margin-top:0">ここが本命。予約したら画面を消す・別タブに移るなどして放置する。</p>
+  <div>
+    <label><input type="radio" name="delay" value="1" checked> 1分後</label>
+    <label><input type="radio" name="delay" value="5"> 5分後</label>
+    <label><input type="radio" name="delay" value="30"> 30分後</label>
+  </div>
+  <button id="schedule">予約する</button>
+  <button id="cancel" class="sub-btn">取り消し</button>
+  <p class="note">予定時刻と実際の発話時刻のズレがログに出る。ズレが大きい＝タイマーが間引かれている。</p>
+</section>
+
+<section>
+  <h2>ログ</h2>
+  <div id="log"></div>
+  <button id="clearLog" class="sub-btn" style="margin-top:10px">クリア</button>
+</section>
+
+<script>
+(function () {
+  'use strict';
+
+  var logEl = document.getElementById('log');
+
+  function now() {
+    var d = new Date();
+    return ('0' + d.getHours()).slice(-2) + ':' +
+           ('0' + d.getMinutes()).slice(-2) + ':' +
+           ('0' + d.getSeconds()).slice(-2);
+  }
+
+  function log(msg) {
+    logEl.textContent += '[' + now() + '] ' + msg + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // ---- 0. 対応状況 ----
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var hasSynth = 'speechSynthesis' in window;
+
+  var supportEl = document.getElementById('support');
+  function row(label, ok, extra) {
+    var d = document.createElement('div');
+    d.className = ok ? 'ok' : 'ng';
+    d.textContent = (ok ? '✓ ' : '✗ ') + label + (extra ? ' — ' + extra : '');
+    supportEl.appendChild(d);
+  }
+  row('音声認識 SpeechRecognition', !!SR,
+      SR ? (window.SpeechRecognition ? '標準' : 'webkit接頭辞') : '非対応');
+  row('音声合成 SpeechSynthesis', hasSynth, hasSynth ? '' : '非対応');
+  row('Wake Lock API', 'wakeLock' in navigator,
+      ('wakeLock' in navigator) ? '画面を保持できる可能性あり' : '非対応');
+
+  var ua = document.createElement('div');
+  ua.style.cssText = 'font-size:11px;color:#6b675f;margin-top:8px;word-break:break-all';
+  ua.textContent = navigator.userAgent;
+  supportEl.appendChild(ua);
+
+  log('起動。認識=' + (!!SR) + ' 合成=' + hasSynth);
+
+  // ---- 1〜2. 音声認識 ----
+  var recognition = null;
+  var finalText = '';
+  var tEl = document.getElementById('transcript');
+  var btnStart = document.getElementById('recStart');
+  var btnStop = document.getElementById('recStop');
+
+  function render(interim) {
+    tEl.innerHTML = '';
+    tEl.appendChild(document.createTextNode(finalText));
+    if (interim) {
+      var s = document.createElement('span');
+      s.className = 'interim';
+      s.textContent = interim;
+      tEl.appendChild(s);
+    }
+  }
+
+  if (!SR) {
+    btnStart.disabled = true;
+    btnStart.textContent = '認識スタート（非対応）';
+  }
+
+  btnStart.addEventListener('click', function () {
+    if (!SR) return;
+    recognition = new SR();
+    recognition.lang = 'ja-JP';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onstart = function () {
+      log('認識 開始');
+      btnStart.disabled = true;
+      btnStop.disabled = false;
+    };
+    recognition.onresult = function (e) {
+      var interim = '';
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        var txt = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          finalText += txt;
+          log('確定: ' + txt);
+        } else {
+          interim += txt;
+        }
+      }
+      render(interim);
+    };
+    recognition.onerror = function (e) { log('認識エラー: ' + e.error); };
+    recognition.onend = function () {
+      log('認識 終了');
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+    };
+
+    finalText = '';
+    render('');
+    recognition.start();
+  });
+
+  btnStop.addEventListener('click', function () {
+    if (recognition) recognition.stop();
+  });
+
+  // ---- 3. 読み上げ ----
+  function speak(text) {
+    if (!hasSynth) { log('読み上げ: 非対応'); return; }
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = 'ja-JP';
+    u.onstart = function () { log('読み上げ 開始: ' + text); };
+    u.onend = function () { log('読み上げ 終了'); };
+    u.onerror = function (e) { log('読み上げエラー: ' + e.error); };
+    window.speechSynthesis.speak(u);
+  }
+
+  document.getElementById('speakNow').addEventListener('click', function () {
+    speak('休憩まで残り15分です');
+  });
+
+  document.getElementById('listVoices').addEventListener('click', function () {
+    if (!hasSynth) { log('音声一覧: 非対応'); return; }
+    var vs = window.speechSynthesis.getVoices();
+    if (!vs.length) { log('音声一覧: 取得できず（読み込み前の可能性）'); return; }
+    var ja = vs.filter(function (v) { return v.lang.indexOf('ja') === 0; });
+    log('音声 全' + vs.length + '件 / 日本語' + ja.length + '件');
+    ja.forEach(function (v) { log('  - ' + v.name + ' (' + v.lang + ')'); });
+  });
+
+  // ---- 4〜7. 予約読み上げ ----
+  var timerId = null;
+  var targetTime = null;
+
+  document.getElementById('schedule').addEventListener('click', function () {
+    if (timerId) clearInterval(timerId);
+
+    var min = 1;
+    var radios = document.getElementsByName('delay');
+    for (var i = 0; i < radios.length; i++) {
+      if (radios[i].checked) min = parseInt(radios[i].value, 10);
+    }
+
+    targetTime = Date.now() + min * 60 * 1000;
+    log('予約: ' + min + '分後（' + new Date(targetTime).toLocaleTimeString('ja-JP') + '）');
+
+    // カウントではなく実時刻と比較する。間引かれてもズレを検出できる
+    timerId = setInterval(function () {
+      var diff = targetTime - Date.now();
+      if (diff <= 0) {
+        clearInterval(timerId);
+        timerId = null;
+        var late = Math.round(-diff / 1000);
+        log('★発火。予定とのズレ: ' + late + '秒');
+        log('  表示状態: ' + document.visibilityState);
+        speak('予定の時刻になりました');
+      }
+    }, 1000);
+  });
+
+  document.getElementById('cancel').addEventListener('click', function () {
+    if (timerId) { clearInterval(timerId); timerId = null; log('予約を取り消し'); }
+  });
+
+  // ---- 表示状態の変化を記録 ----
+  document.addEventListener('visibilitychange', function () {
+    log('visibilitychange: ' + document.visibilityState);
+    if (document.visibilityState === 'visible' && targetTime) {
+      var diff = targetTime - Date.now();
+      if (diff > 0) log('  残り約' + Math.round(diff / 1000) + '秒');
+    }
+  });
+
+  window.addEventListener('pageshow', function () { log('pageshow'); });
+  window.addEventListener('pagehide', function () { log('pagehide'); });
+
+  document.getElementById('clearLog').addEventListener('click', function () {
+    logEl.textContent = '';
+  });
+})();
+</script>
+</body>
+</html>
